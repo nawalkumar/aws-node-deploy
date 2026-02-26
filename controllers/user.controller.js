@@ -128,7 +128,7 @@ export const login = async (req, res) => {
       role: user.role,
       profile: user.profile,
     };
-
+    console.log("Setting cookie:", token);
     return res
       .status(200)
       .cookie("token", token, {
