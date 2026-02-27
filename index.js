@@ -34,8 +34,7 @@ const corsOptions = {
   origin: [
     "http://localhost:5173",                              // local dev (Vite)
     "http://localhost:5011",                              // if you use CRA sometimes
-    "https://job-portal-application-ot68.vercel.app",     // ← YOUR REAL VERCEL URL
-    "https://job-portal-application-ot68.vercel.app/",
+    "http://jop-portal-frontend.s3-website.ap-south-1.amazonaws.com",
   ],
   credentials: true,                                      // very important for cookies/JWT
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
