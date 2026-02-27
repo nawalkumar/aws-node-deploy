@@ -29,7 +29,7 @@ export const register = async (req, res) => {
     const existingPan = await User.findOne({ pancard });
     if (existingPan) return res.status(400).json({ message: "PAN already exists", success: false });
 
-    // File upload — make it OPTIONAL for testing
+    // File upload — optional
     let profilePhotoUrl = null;
     if (req.file) {
       console.log("Uploading file to Cloudinary...");
@@ -40,10 +40,10 @@ export const register = async (req, res) => {
         console.log("Cloudinary success:", profilePhotoUrl);
       } catch (cloudErr) {
         console.error("Cloudinary FAILED:", cloudErr.message);
-        // Continue without photo — don't crash
+        // Continue without photo
       }
     } else {
-      console.log("No profile photo uploaded — continuing without it");
+      console.log("No profile photo uploaded");
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -61,125 +61,100 @@ export const register = async (req, res) => {
       },
     });
 
-    console.log("User created successfully:", newUser.email);
+    console.log("User created:", newUser.email);
 
     return res.status(201).json({
       message: `Account created successfully for ${fullname}`,
       success: true,
     });
   } catch (error) {
-    console.error("REGISTER CRASH:", error.message);
-    console.error(error.stack);
+    console.error("REGISTER CRASH:", error.message, error.stack);
     return res.status(500).json({
       message: "Server error during registration",
-      error: error.message,  // ← send error message to frontend for debugging
+      error: error.message,
       success: false,
     });
   }
 };
+
 export const login = async (req, res) => {
   try {
     const { email, password, role } = req.body;
 
     if (!email || !password || !role) {
-      return res.status(400).json({
-        message: "Missing required fields",
-        success: false,
-      });
+      return res.status(400).json({ message: "Missing required fields", success: false });
     }
 
     const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({
-        message: "Incorrect email or password",
-        success: false,
-      });
-    }
+    if (!user) return res.status(401).json({ message: "Invalid credentials", success: false });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(400).json({
-        message: "Incorrect email or password",
-        success: false,
-      });
-    }
+    if (!isMatch) return res.status(401).json({ message: "Invalid credentials", success: false });
 
-    if (user.role !== role) {
-      return res.status(403).json({
-        message: "You don't have the necessary role to access this resource",
-        success: false,
-      });
-    }
+    if (user.role !== role) return res.status(403).json({ message: "Invalid role", success: false });
 
-    const tokenData = {
-      userId: user._id,
-    };
-    const token = jwt.sign(tokenData, process.env.JWT_SECRET, {
-      expiresIn: "1d",
-    });
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: "1d" });
 
     const sanitizedUser = {
       _id: user._id,
       fullname: user.fullname,
       email: user.email,
       phoneNumber: user.phoneNumber,
-      adharcard: user.adharcard,
-      pancard: user.pancard,
       role: user.role,
       profile: user.profile,
     };
-    console.log("Setting cookie:", token);
-    return res
-      .status(200)
-      .cookie("token", token, {
-        maxAge: 24 * 60 * 60 * 1000,
-        httpOnly: true,
-        secure: false,
-        sameSite: "Lax",
-      })
-      .json({
-        message: `Welcome back ${user.fullname}`,
-        user: sanitizedUser,
-        success: true,
-      });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      message: "Server Error login failed",
-      success: false,
+
+    console.log("Setting cookie for user:", user.email);
+
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: false,                // false for HTTP (EC2)
+      sameSite: "Lax",              // works on HTTP
+      maxAge: 24 * 60 * 60 * 1000,
+      path: "/",
     });
+
+    return res.status(200).json({
+      message: `Welcome back ${user.fullname}`,
+      user: sanitizedUser,
+      success: true,
+    });
+  } catch (error) {
+    console.error("LOGIN CRASH:", error.message, error.stack);
+    res.status(500).json({ message: "Server Error login failed", success: false });
   }
 };
 
 export const logout = async (req, res) => {
   try {
-    return res.status(200).cookie("token", "", { maxAge: 0 }).json({
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: false,
+      sameSite: "Lax",
+      path: "/",
+    });
+
+    return res.status(200).json({
       message: "Logged out successfully",
       success: true,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      message: "Server Error logging out",
-      success: false,
-    });
+    console.error("LOGOUT ERROR:", error);
+    res.status(500).json({ message: "Server Error logging out", success: false });
   }
 };
 
 export const updateProfile = async (req, res) => {
   try {
-    const { fullname, email, phoneNumber, bio, skills } = req.body;
-    const file = req.file;
-
     const userId = req.id;
-    const user = await User.findById(userId);
-
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found",
-        success: false,
-      });
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized - no token", success: false });
     }
+
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: "User not found", success: false });
+
+    const { fullname, email, phoneNumber, bio, skills } = req.body || {};
 
     if (fullname) user.fullname = fullname;
     if (email) user.email = email;
@@ -187,17 +162,16 @@ export const updateProfile = async (req, res) => {
     if (bio) user.profile.bio = bio;
     if (skills) user.profile.skills = skills.split(",");
 
-    if (file) {
-      const fileUri = getDataUri(file);
+    if (req.file) {
+      const fileUri = getDataUri(req.file);
       const cloudResponse = await cloudinary.uploader.upload(fileUri.content, {
-        resource_type: "raw",   // 👈 must be raw for PDFs
-        folder: "resumes",      // optional
-        public_id: `${userId}_resume` // optional: to control file name
+        resource_type: "raw",
+        folder: "resumes",
+        public_id: `${userId}_resume`,
       });
 
       user.profile.resume = cloudResponse.secure_url;
-      user.profile.resumeOriginalName = file.originalname;
-
+      user.profile.resumeOriginalName = req.file.originalname;
     }
 
     await user.save();
@@ -217,10 +191,7 @@ export const updateProfile = async (req, res) => {
       success: true,
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({
-      message: "Server Error updating profile",
-      success: false,
-    });
+    console.error("PROFILE UPDATE CRASH:", error.message, error.stack);
+    res.status(500).json({ message: "Server Error updating profile", success: false });
   }
 };
